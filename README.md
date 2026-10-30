@@ -6,12 +6,13 @@ iOS 17+, Swift 6, no third-party dependencies.
 
 Xcode → File → Add Package Dependencies → `https://github.com/olegklimakov/relk-swift`,
 product **RelkKit**.
-In a `Package.swift`: `.package(url: "https://github.com/olegklimakov/relk-swift", from: "0.2.0")` and `.product(name: "RelkKit", package: "relk-swift")`.
+In a `Package.swift`: `.package(url: "https://github.com/olegklimakov/relk-swift", from: "0.3.0")` and `.product(name: "RelkKit", package: "relk-swift")`.
 
 ## 2. Configure at launch and forward push callbacks
 
 ```swift
 import RelkKit
+import UIKit
 import UserNotifications
 
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -83,8 +84,8 @@ WindowGroup {
 won't open it for you.
 
 **Unread badge:** `Relk.unreadCount` is observable, so `.badge(Relk.unreadCount)`
-on the row updates by itself. It is refreshed at launch, on foreground, on pushes and
-while the chat is open.
+on the row updates by itself. It is refreshed at launch, on foreground and on pushes,
+and drops to 0 as the user reads the replies in the chat.
 
 **Welcome:** a greeting from you, at the top of the chat, from the first open on:
 
@@ -147,3 +148,7 @@ Messages are stored under that per-install identifier. Apple counts data tied to
 any identifier as linked, even a pseudonymous one, so declare all of the above
 under **Data Linked to You**, purpose **App Functionality**, and
 **Data Used to Track You: No**.
+
+The SDK also sends your app's bundle ID, so the dashboard can tell you when the
+app has a different bundle ID in Relk, which Apple refuses pushes for. It names
+your app, not the user, so it is not part of the label.

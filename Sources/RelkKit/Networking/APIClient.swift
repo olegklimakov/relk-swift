@@ -13,6 +13,8 @@ enum LiveEvent: Sendable, Equatable {
 final class APIClient: Sendable {
     let transport: Transport
     let credentials: Credentials
+    /// nil omits `bundle_id` from both register and the device-token upload.
+    private let bundleID: String?
     private let log = Logger(subsystem: "Relk", category: "api")
 
     init(
@@ -20,13 +22,16 @@ final class APIClient: Sendable {
         serverURL: URL,
         session: URLSession,
         tokenStore: any TokenStore,
+        bundleID: String?,
         onRegister: @escaping @Sendable (_ replacedIdentity: Bool) -> Void = { _ in }
     ) {
         let transport = Transport(serverURL: serverURL, session: session)
         self.transport = transport
+        self.bundleID = bundleID
         self.credentials = Credentials(
             transport: transport,
             appKey: appKey,
+            bundleID: bundleID,
             store: tokenStore,
             onRegister: onRegister
         )
@@ -77,7 +82,10 @@ final class APIClient: Sendable {
         _ = try await call(try jsonRequest("POST", "v1/read", body: ReadMarker(seq: seq)))
     }
 
-    func registerDeviceToken(_ registration: DeviceTokenRegistration) async throws {
+    func registerDeviceToken(token: String, environment: PushEnvironment) async throws {
+        let registration = DeviceTokenRegistration(
+            token: token, environment: environment, bundleID: bundleID
+        )
         _ = try await call(try jsonRequest("PUT", "v1/device-token", body: registration))
     }
 

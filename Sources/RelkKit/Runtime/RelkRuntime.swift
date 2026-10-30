@@ -49,6 +49,9 @@ final class RelkRuntime {
             serverURL: serverURL,
             session: .relk(),
             tokenStore: KeychainTokenStore(account: appKey),
+            // In an app extension Bundle.main is the .appex, whose id would read as a
+            // mismatch with the app's.
+            bundleID: Bundle.main.bundleURL.pathExtension == "appex" ? nil : Bundle.main.bundleIdentifier,
             onRegister: { [weak self] replacedIdentity in
                 Task { @MainActor in self?.identityDidChange(replacedIdentity: replacedIdentity) }
             }
@@ -105,11 +108,11 @@ final class RelkRuntime {
     /// push token would create a thread for every install. `onRegister` retries.
     private func uploadDeviceToken() {
         guard let session, let apnsToken else { return }
-        let registration = DeviceTokenRegistration(token: apnsToken, environment: .detect())
+        let environment = PushEnvironment.detect()
         Task {
             guard await session.client.hasIdentity() else { return }
             do {
-                try await session.client.registerDeviceToken(registration)
+                try await session.client.registerDeviceToken(token: apnsToken, environment: environment)
             } catch {
                 log.error("Device token upload failed: \(String(describing: error), privacy: .public)")
             }

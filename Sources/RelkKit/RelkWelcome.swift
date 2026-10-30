@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The developer's greeting at the top of the chat. The SDK draws it on the device: it is
-/// never sent, never stored, and never reaches the inbox or Telegram (D53).
+/// never sent, never stored, and never reaches the inbox or Telegram.
 ///
 /// ```swift
 /// Relk.configure(
@@ -12,10 +12,17 @@ import SwiftUI
 /// The text comes from the host app's String Catalog, so it is translated with the app. A
 /// literal resolves in the main bundle; strings kept in a package need its `bundle:`.
 public struct RelkWelcome: Sendable {
+    /// The greeting. A string literal is looked up in the main bundle's String Catalog.
     public var text: LocalizedStringResource
+    /// Shown above the bubble and read first by VoiceOver; without it VoiceOver says "Developer".
     public var name: String?
+    /// Cropped to fill a 32 pt circle beside the bubble; hidden from VoiceOver.
     public var avatar: Image?
 
+    /// - Parameters:
+    ///   - text: A key or literal from the host app's String Catalog.
+    ///   - name: The developer's name above the bubble.
+    ///   - avatar: A photo, cropped to a 32 pt circle.
     public init(_ text: LocalizedStringResource, name: String? = nil, avatar: Image? = nil) {
         self.text = text
         self.name = name

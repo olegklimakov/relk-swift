@@ -66,9 +66,17 @@ struct ReadMarker: Encodable, Sendable {
     let seq: Int
 }
 
+// `bundleID`, here and in RegisterRequest, lets the dashboard spot an app set up under a
+// different bundle ID, which Apple refuses pushes for; servers older than A3 PR 12b
+// ignore it.
 struct DeviceTokenRegistration: Encodable, Sendable, Equatable {
     let token: String
     let environment: PushEnvironment
+    let bundleID: String?
+}
+
+struct RegisterRequest: Encodable, Sendable {
+    let bundleID: String
 }
 
 struct ServerErrorBody: Decodable, Sendable {

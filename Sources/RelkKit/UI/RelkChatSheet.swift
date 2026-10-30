@@ -7,6 +7,10 @@ extension View {
     /// top at that moment, so it also appears over the host's own sheets and covers.
     ///
     /// - Parameters:
+    ///   - isPresented: set to `false` by the SDK when the user closes the chat, or when
+    ///     it can't be presented (another `.relkChat` is already showing it).
+    ///   - screen: where the chat was opened from; sent with every message so the
+    ///     developer sees the context.
     ///   - tint: colours the chat. A sheet does not inherit the presenter's
     ///     `.tint`, so without it the chat falls back to the AccentColor asset.
     ///   - presentsPushes: while `false`, a tapped push waits and opens the chat

@@ -6,6 +6,7 @@ import os
 actor Credentials {
     private let transport: Transport
     private let appKey: String
+    private let bundleID: String?
     private let store: any TokenStore
     private let onRegister: @Sendable (_ replacedIdentity: Bool) -> Void
     private let log = Logger(subsystem: "Relk", category: "credentials")
@@ -18,11 +19,13 @@ actor Credentials {
     init(
         transport: Transport,
         appKey: String,
+        bundleID: String?,
         store: any TokenStore,
         onRegister: @escaping @Sendable (_ replacedIdentity: Bool) -> Void
     ) {
         self.transport = transport
         self.appKey = appKey
+        self.bundleID = bundleID
         self.store = store
         self.onRegister = onRegister
     }
@@ -61,6 +64,10 @@ actor Credentials {
     private func register() async throws -> String {
         var request = transport.request("POST", "v1/register")
         request.setValue(appKey, forHTTPHeaderField: "X-Relk-App-Key")
+        if let bundleID {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONCoding.makeEncoder().encode(RegisterRequest(bundleID: bundleID))
+        }
         let (data, response) = try await transport.data(for: request)
         try Transport.validate(response, data: data)
         let token = try JSONCoding.makeDecoder().decode(RegisterResponse.self, from: data).token
