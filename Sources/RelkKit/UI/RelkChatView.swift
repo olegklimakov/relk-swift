@@ -5,20 +5,25 @@ import SwiftUI
 /// brings its own navigation bar.
 public struct RelkChatView: View {
     private let screen: String?
+    private let meta: [String: RelkMetaValue]
     private let onDone: (@MainActor () -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.isPresented) private var isPresented
 
-    /// - Parameter screen: where the chat was opened from; sent with every
-    ///   message so the developer sees the context.
-    public init(screen: String? = nil) {
-        self.init(screen: screen, onDone: nil)
+    /// - Parameters:
+    ///   - screen: where the chat was opened from; sent with every message so the
+    ///     developer sees the context.
+    ///   - meta: your app's own JSON, attached to every message sent while the chat
+    ///     shows it; see `relkChat(isPresented:screen:meta:tint:presentsPushes:)`.
+    public init(screen: String? = nil, meta: [String: RelkMetaValue] = [:]) {
+        self.init(screen: screen, meta: meta, onDone: nil)
     }
 
     /// `onDone` replaces `dismiss`, which can't reach a UIKit presentation.
-    init(screen: String?, onDone: (@MainActor () -> Void)?) {
+    init(screen: String?, meta: [String: RelkMetaValue], onDone: (@MainActor () -> Void)?) {
         self.screen = screen
+        self.meta = meta
         self.onDone = onDone
     }
 
@@ -26,7 +31,7 @@ public struct RelkChatView: View {
         NavigationStack {
             Group {
                 if let session = RelkRuntime.shared.session {
-                    ChatScreen(store: session.chat, screen: screen, welcome: RelkRuntime.shared.welcome)
+                    ChatScreen(store: session.chat, screen: screen, meta: meta, welcome: RelkRuntime.shared.welcome)
                         .environment(\.relkImageLoader, session.images)
                 } else {
                     ContentUnavailableView {
@@ -60,26 +65,27 @@ public struct RelkChatView: View {
 struct ChatScreen: View {
     @Bindable var store: ChatStore
     let screen: String?
+    let meta: [String: RelkMetaValue]
     var welcome: RelkWelcome?
 
     /// From UIApplication, not `scenePhase`: a UIHostingController presented
     /// through UIKit (as `.relkChat` does) never receives the scene's phase.
     @State private var isAppActive = UIApplication.shared.applicationState == .active
     @State private var isOnScreen = false
+    @State private var isWindowKey = false
     @State private var viewer: ImageViewerSelection?
 
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                ComposerView(store: store)
+                ComposerView(store: store, screen: screen, meta: meta)
             }
             .onAppear {
-                store.screen = screen
                 isOnScreen = true
                 updateLive()
             }
-            // Foreground refreshes come from the runtime's observer.
+            // Activations are refreshed by the runtime's observer.
             .task {
                 await store.refreshNotificationStatus()
             }
@@ -97,6 +103,12 @@ struct ChatScreen: View {
             }
             .onChange(of: viewer == nil) {
                 updateLive()
+            }
+            .background {
+                KeyWindowReader { isKey in
+                    isWindowKey = isKey
+                    updateLive()
+                }
             }
             .fullScreenCover(item: $viewer) { selection in
                 ImageViewer(selection: selection)
@@ -134,9 +146,10 @@ struct ChatScreen: View {
     }
 
     /// The image viewer's full-screen cover makes this view disappear; the
-    /// chat stays live underneath it.
+    /// chat stays live underneath it. Under a host's lock cover, which holds key,
+    /// it is not: replies would be marked read and their banners dropped unseen.
     private func updateLive() {
-        store.setLive((isOnScreen || viewer != nil) && isAppActive)
+        store.setLive((isOnScreen || viewer != nil) && isAppActive && isWindowKey)
     }
 }
 

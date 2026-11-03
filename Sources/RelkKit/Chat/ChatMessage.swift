@@ -71,6 +71,7 @@ struct Outgoing: Equatable {
     let clientId: UUID
     let body: String?
     let context: MessageContext
+    var meta: [String: RelkMetaValue]?
     let createdAt: Date
     let images: [DraftImage]
     var uploaded: [UUID: MessageAttachment] = [:]

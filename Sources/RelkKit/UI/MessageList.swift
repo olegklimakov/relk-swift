@@ -124,6 +124,9 @@ enum ChatFormatting {
     }()
 
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    /// Replies come from any member of the Telegram group, and a tapped link goes to the
+    /// host app's `openURL`, so a custom scheme would reach the host's own URL handlers.
+    private static let linkSchemes: Set<String> = ["http", "https", "mailto", "tel"]
 
     /// Rows re-render on every store change (upload progress included);
     /// detection runs once per text instead.
@@ -140,12 +143,13 @@ enum ChatFormatting {
         return result
     }
 
-    private static func detectLinks(in text: String) -> AttributedString {
+    static func detectLinks(in text: String) -> AttributedString {
         var result = AttributedString(text)
         guard let linkDetector else { return result }
         let matches = linkDetector.matches(in: text, range: NSRange(text.startIndex..., in: text))
         for match in matches {
             guard let url = match.url,
+                  let scheme = url.scheme?.lowercased(), linkSchemes.contains(scheme),
                   let range = Range(match.range, in: text),
                   let attributedRange = Range(range, in: result)
             else { continue }

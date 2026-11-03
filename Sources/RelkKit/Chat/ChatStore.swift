@@ -46,10 +46,10 @@ final class ChatStore {
     /// `nil` until first read. Re-read rather than cached in storage: the user
     /// can change it in Settings at any time.
     private(set) var notificationStatus: UNAuthorizationStatus?
+    var notificationPrompt: RelkNotificationPrompt
     var draftText = ""
     var attachmentFailed = false
 
-    @ObservationIgnored var screen: String?
     @ObservationIgnored var onRead: @MainActor () -> Void = {}
 
     @ObservationIgnored private let service: any ChatService
@@ -68,12 +68,14 @@ final class ChatStore {
 
     init(
         service: any ChatService,
+        notificationPrompt: RelkNotificationPrompt,
         imageLoader: ImageLoader? = nil,
         notifications: any NotificationAuthorizing = SystemNotificationAuthorization(),
         presence: ChatPresence = ChatPresence(),
         makeContext: @escaping (String?) -> MessageContext = { DeviceContext.current(screen: $0) }
     ) {
         self.service = service
+        self.notificationPrompt = notificationPrompt
         self.imageLoader = imageLoader
         self.notifications = notifications
         self.presence = presence
@@ -115,7 +117,8 @@ final class ChatStore {
     /// Asked only once the user has a confirmed message in the thread, when a
     /// reply is something they are actually waiting for.
     var showsNotificationPrompt: Bool {
-        notificationStatus == .notDetermined && sent.contains { $0.sender == .user }
+        if case .never = notificationPrompt { return false }
+        return notificationStatus == .notDetermined && sent.contains { $0.sender == .user }
     }
 
     /// Also registers with APNs once per launch when notifications are allowed,
@@ -129,13 +132,22 @@ final class ChatStore {
         }
     }
 
+    /// Under `.host` the store never learns the outcome; `RelkRuntime` re-reads the status
+    /// whenever the app becomes active, which the system dialog and Settings both cause.
     func enableNotifications() async {
-        do {
-            _ = try await notifications.request()
-        } catch {
-            log.error("Notification authorization failed: \(String(describing: error), privacy: .public)")
+        switch notificationPrompt {
+        case .automatic:
+            do {
+                _ = try await notifications.request()
+            } catch {
+                log.error("Notification authorization failed: \(String(describing: error), privacy: .public)")
+            }
+            await refreshNotificationStatus()
+        case .host(let ask):
+            ask()
+        case .never:
+            break
         }
-        await refreshNotificationStatus()
     }
 
     // MARK: - Live connection
@@ -252,13 +264,14 @@ final class ChatStore {
     // MARK: - Sending
 
     @discardableResult
-    func send() -> Task<Void, Never>? {
+    func send(screen: String?, meta: [String: RelkMetaValue]) -> Task<Void, Never>? {
         guard canSend else { return nil }
         let body = trimmedDraft
         let item = Outgoing(
             clientId: UUID(),
             body: body.isEmpty ? nil : body,
             context: makeContext(screen),
+            meta: checked(meta),
             createdAt: .now,
             images: draftImages
         )
@@ -266,6 +279,16 @@ final class ChatStore {
         draftText = ""
         draftImages = []
         return Task { await deliver(item.clientId) }
+    }
+
+    private func checked(_ meta: [String: RelkMetaValue]) -> [String: RelkMetaValue]? {
+        switch RelkMeta.validated(meta) {
+        case .success(let meta):
+            return meta
+        case .failure(let problem):
+            log.error("Meta dropped, \(problem.description, privacy: .public); the message goes without it")
+            return nil
+        }
     }
 
     /// Reuses the `client_id`, so a message the server already stored is not duplicated.
@@ -284,7 +307,8 @@ final class ChatStore {
 
     /// On `attachment_unavailable` (expired uploads, or ids owned by the user a
     /// 401 re-registration replaced) the images are uploaded again and the
-    /// message resent once, as docs/api.md prescribes.
+    /// message resent once, as docs/api.md prescribes. On `meta_invalid`, a meta the
+    /// local check passed but the server refused, it is resent without the meta.
     private func deliver(_ clientId: UUID) async {
         do {
             let message: Message?
@@ -292,6 +316,10 @@ final class ChatStore {
                 message = try await uploadAndSend(clientId)
             } catch let error as RelkError where error.serverCode == ServerErrorCode.attachmentUnavailable {
                 update(clientId) { $0.discardUploads() }
+                message = try await uploadAndSend(clientId)
+            } catch let error as RelkError where error.serverCode == ServerErrorCode.metaInvalid {
+                log.error("Meta refused by the server, \(String(describing: error), privacy: .public); resending without it")
+                update(clientId) { $0.meta = nil }
                 message = try await uploadAndSend(clientId)
             }
             if let message { merge([message], advancingCursor: false) }
@@ -323,7 +351,8 @@ final class ChatStore {
             clientId: clientId,
             body: item.body,
             attachmentIds: attachmentIDs,
-            context: item.context
+            context: item.context,
+            meta: item.meta
         ))
     }
 

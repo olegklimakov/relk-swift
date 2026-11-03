@@ -1,7 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// Presents the chat from the key window's topmost presented controller.
+/// Presents the chat from the topmost presented controller of the foreground
+/// scene's normal-level window (see `presentationWindow(among:)`).
 ///
 /// A SwiftUI `.sheet` on the host's root can't present while that view already
 /// presents a sheet or full-screen cover (a run, a paywall), and its binding
@@ -19,6 +20,7 @@ final class ChatPresenter {
         let id = UUID()
         let owner: UUID
         let screen: String?
+        var meta: [String: RelkMetaValue]
         let tint: Color?
         let onDismissed: @MainActor () -> Void
     }
@@ -38,7 +40,7 @@ final class ChatPresenter {
     private let schedule: @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> Void
 
     init(
-        topmost: @escaping @MainActor () -> UIViewController? = ChatPresenter.keyWindowTopmost,
+        topmost: @escaping @MainActor () -> UIViewController? = ChatPresenter.foregroundTopmost,
         schedule: @escaping @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> Void = { delay, work in
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated(work) }
         }
@@ -58,13 +60,15 @@ final class ChatPresenter {
     func present(
         owner: UUID,
         screen: String?,
+        meta: [String: RelkMetaValue],
         tint: Color?,
         onDismissed: @escaping @MainActor () -> Void
     ) {
         healIfStale()
         switch state {
         case .idle:
-            attempt(Request(owner: owner, screen: screen, tint: tint, onDismissed: onDismissed), number: 0)
+            let request = Request(owner: owner, screen: screen, meta: meta, tint: tint, onDismissed: onDismissed)
+            attempt(request, number: 0)
         case .waiting(let request, _), .presented(_, let request):
             if request.owner != owner { onDismissed() }
         }
@@ -72,6 +76,23 @@ final class ChatPresenter {
 
     func dismiss(owner: UUID) {
         dismiss(owner: owner, attempt: 0)
+    }
+
+    /// The owner's new meta, for the messages sent from now on.
+    func update(owner: UUID, meta: [String: RelkMetaValue]) {
+        switch state {
+        case .idle:
+            break
+        case .waiting(var request, let number):
+            guard request.owner == owner else { return }
+            request.meta = meta
+            state = .waiting(request, attempt: number)
+        case .presented(let controller, var request):
+            guard request.owner == owner else { return }
+            request.meta = meta
+            controller.meta = meta
+            state = .presented(controller, request)
+        }
     }
 
     private func dismiss(owner: UUID, attempt number: Int) {
@@ -115,13 +136,13 @@ final class ChatPresenter {
             state = .waiting(request, attempt: number)
             schedule(Self.retryDelay) { [weak self] in
                 guard let self, case .waiting(let pending, _) = self.state, pending.id == request.id else { return }
-                self.attempt(request, number: number + 1)
+                self.attempt(pending, number: number + 1)
             }
             return
         }
 
         let owner = request.owner
-        let controller = ChatHostingController(screen: request.screen, tint: request.tint) { [weak self] in
+        let controller = ChatHostingController(screen: request.screen, meta: request.meta, tint: request.tint) { [weak self] in
             self?.dismiss(owner: owner)
         }
         controller.onDismissed = { [weak self] in self?.finish(request.id) }
@@ -149,15 +170,25 @@ final class ChatPresenter {
         if detached || offScreen { finish(request.id) }
     }
 
-    /// `nil` while something on the way can't present: a controller mid-transition,
-    /// or an alert, which can't present and must not be covered.
-    static func keyWindowTopmost() -> UIViewController? {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let window = scenes
-            .sorted { $0.activationState == .foregroundActive && $1.activationState != .foregroundActive }
+    /// `nil` while something on the way can't present: no usable window, a controller
+    /// mid-transition, or an alert, which can't present and must not be covered.
+    static func foregroundTopmost() -> UIViewController? {
+        let windows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
-            .first(where: \.isKeyWindow)
-        return window?.rootViewController.flatMap(topmost(from:))
+        return presentationWindow(among: windows)?.rootViewController.flatMap(topmost(from:))
+    }
+
+    /// A host's lock or privacy cover is a window above `.normal` and is often key; the
+    /// chat presented from it would show the thread over the lock screen. An inactive
+    /// scene still counts: a host running Face ID on unlock keeps it inactive for seconds.
+    static func presentationWindow<Window: PresentationCandidate>(among windows: [Window]) -> Window? {
+        let usable = windows.filter { $0.windowLevel == .normal && !$0.isHidden }
+        for state in [UIScene.ActivationState.foregroundActive, .foregroundInactive] {
+            let inScene = usable.filter { $0.sceneActivationState == state }
+            if let window = inScene.first(where: \.isKeyWindow) ?? inScene.first { return window }
+        }
+        return nil
     }
 
     static func topmost(from root: UIViewController) -> UIViewController? {
@@ -170,12 +201,46 @@ final class ChatPresenter {
     }
 }
 
+@MainActor
+protocol PresentationCandidate {
+    var windowLevel: UIWindow.Level { get }
+    var isKeyWindow: Bool { get }
+    var isHidden: Bool { get }
+    var sceneActivationState: UIScene.ActivationState { get }
+}
+
+extension UIWindow: PresentationCandidate {
+    var sceneActivationState: UIScene.ActivationState {
+        windowScene?.activationState ?? .unattached
+    }
+}
+
 final class ChatHostingController: UIHostingController<AnyView> {
     var onDismissed: (@MainActor () -> Void)?
     private(set) var hasAppeared = false
+    var meta: [String: RelkMetaValue] {
+        didSet { rootView = Self.root(screen: screen, meta: meta, tint: tint, onDone: onDone) }
+    }
 
-    init(screen: String?, tint: Color?, onDone: @escaping @MainActor () -> Void) {
-        super.init(rootView: AnyView(RelkChatView(screen: screen, onDone: onDone).tint(tint)))
+    private let screen: String?
+    private let tint: Color?
+    private let onDone: @MainActor () -> Void
+
+    init(screen: String?, meta: [String: RelkMetaValue], tint: Color?, onDone: @escaping @MainActor () -> Void) {
+        self.screen = screen
+        self.meta = meta
+        self.tint = tint
+        self.onDone = onDone
+        super.init(rootView: Self.root(screen: screen, meta: meta, tint: tint, onDone: onDone))
+    }
+
+    private static func root(
+        screen: String?,
+        meta: [String: RelkMetaValue],
+        tint: Color?,
+        onDone: @escaping @MainActor () -> Void
+    ) -> AnyView {
+        AnyView(RelkChatView(screen: screen, meta: meta, onDone: onDone).tint(tint))
     }
 
     @MainActor required dynamic init?(coder: NSCoder) {

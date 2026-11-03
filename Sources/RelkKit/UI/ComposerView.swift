@@ -3,6 +3,8 @@ import SwiftUI
 
 struct ComposerView: View {
     @Bindable var store: ChatStore
+    let screen: String?
+    let meta: [String: RelkMetaValue]
 
     @State private var pickerItems: [PhotosPickerItem] = []
 
@@ -70,7 +72,7 @@ struct ComposerView: View {
 
     private var sendButton: some View {
         Button {
-            store.send()
+            store.send(screen: screen, meta: meta)
         } label: {
             Image(systemName: "arrow.up.circle.fill")
                 .font(.system(size: 32))

@@ -52,6 +52,8 @@ struct NewMessage: Encodable, Sendable, Equatable {
     let body: String?
     let attachmentIds: [UUID]
     let context: MessageContext
+    /// Left out of the JSON when `nil`.
+    let meta: [String: RelkMetaValue]?
 }
 
 struct RegisterResponse: Decodable, Sendable {

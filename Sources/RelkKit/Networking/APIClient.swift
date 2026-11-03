@@ -13,8 +13,11 @@ enum LiveEvent: Sendable, Equatable {
 final class APIClient: Sendable {
     let transport: Transport
     let credentials: Credentials
+    private let appKey: String
     /// nil omits `bundle_id` from both register and the device-token upload.
     private let bundleID: String?
+    /// The wait between event-stream reconnects; tests record it instead.
+    private let sleep: @Sendable (Duration) async throws -> Void
     private let log = Logger(subsystem: "Relk", category: "api")
 
     init(
@@ -23,16 +26,21 @@ final class APIClient: Sendable {
         session: URLSession,
         tokenStore: any TokenStore,
         bundleID: String?,
+        replacing: Task<Void, Never>? = nil,
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
         onRegister: @escaping @Sendable (_ replacedIdentity: Bool) -> Void = { _ in }
     ) {
         let transport = Transport(serverURL: serverURL, session: session)
         self.transport = transport
+        self.appKey = appKey
         self.bundleID = bundleID
+        self.sleep = sleep
         self.credentials = Credentials(
             transport: transport,
             appKey: appKey,
             bundleID: bundleID,
             store: tokenStore,
+            replacing: replacing,
             onRegister: onRegister
         )
     }
@@ -89,6 +97,30 @@ final class APIClient: Sendable {
         _ = try await call(try jsonRequest("PUT", "v1/device-token", body: registration))
     }
 
+    /// Not through `authorized(_:)`: the token is a retired identity's, and a 401 must not
+    /// register a new one.
+    func unregisterDevice(token: String) async throws {
+        let request = transport.request("DELETE", "v1/device-token").authorized(with: token)
+        let (data, response) = try await transport.data(for: request)
+        try Transport.validate(response, data: data)
+    }
+
+    /// Deletes the thread on the server and retires the credentials. Without a token
+    /// there is nothing on the server to delete.
+    func deleteThread() async throws {
+        try await credentials.retire { [transport, appKey] token in
+            var request = transport.request("DELETE", "v1/thread")
+            request.setValue(appKey, forHTTPHeaderField: "X-Relk-App-Key")
+            let (data, response) = try await transport.data(for: request.authorized(with: token))
+            try Transport.validate(response, data: data)
+        }
+    }
+
+    /// The thread's images, which the session's URLCache keeps on disk.
+    func removeCachedResponses() {
+        transport.session.configuration.urlCache?.removeAllCachedResponses()
+    }
+
     /// Server-sent events for the caller's thread, reconnecting with backoff
     /// until the consumer stops iterating.
     func events() -> AsyncStream<LiveEvent> {
@@ -109,6 +141,8 @@ final class APIClient: Sendable {
         var backoff = Backoff()
 
         while !Task.isCancelled {
+            var parser = SSEParser()
+            var overflowed = false
             do {
                 let (bytes, response) = try await authorized { token in
                     try await transport.bytes(for: request.authorized(with: token))
@@ -117,10 +151,16 @@ final class APIClient: Sendable {
                 try Transport.validate(response, data: Data())
                 continuation.yield(.connected)
 
-                var parser = SSEParser()
                 for try await byte in bytes {
-                    backoff.reset()
-                    guard let event = parser.feed(byte), event.type == "message" else { continue }
+                    let event: SSEEvent?
+                    do {
+                        event = try parser.feed(byte)
+                    } catch {
+                        overflowed = true
+                        bytes.task.cancel()
+                        throw error
+                    }
+                    guard let event, event.type == "message" else { continue }
                     do {
                         continuation.yield(.message(try decoder.decode(Message.self, from: Data(event.data.utf8))))
                     } catch {
@@ -131,8 +171,10 @@ final class APIClient: Sendable {
                 if Task.isCancelled { break }
                 log.info("Event stream dropped: \(String(describing: error), privacy: .public)")
             }
+            // Not on any byte: a server that keeps sending an oversized event backs off too.
+            if parser.heardFromServer, !overflowed { backoff.reset() }
             do {
-                try await Task.sleep(for: backoff.next())
+                try await sleep(backoff.next())
             } catch {
                 break
             }
