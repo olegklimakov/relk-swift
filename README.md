@@ -75,7 +75,8 @@ WindowGroup {
   The binding goes back to `false` however the chat is closed.
 - The chat is only presented from a visible window at `.normal` level in a
   foreground scene (active, or inactive while Face ID or Control Center is up), never
-  from a window of your own above that level. Keep a lock, a privacy blur or a
+  from a window of your own above that level, and never on an external display
+  (`.windowExternalDisplayNonInteractive`). Keep a lock, a privacy blur or a
   passcode screen in a window above `.normal` (say `.alert + 1`): it then stays on
   top even while it is the key window, and a chat opened from code or a push
   meanwhile appears under it. A cover at `.normal` made key would be chosen and

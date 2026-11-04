@@ -182,8 +182,12 @@ final class ChatPresenter {
     /// A host's lock or privacy cover is a window above `.normal` and is often key; the
     /// chat presented from it would show the thread over the lock screen. An inactive
     /// scene still counts: a host running Face ID on unlock keeps it inactive for seconds.
+    /// A TV or monitor scene is often active while the phone's is inactive (Control Center
+    /// over a run on a TV), and nobody can touch the chat there.
     static func presentationWindow<Window: PresentationCandidate>(among windows: [Window]) -> Window? {
-        let usable = windows.filter { $0.windowLevel == .normal && !$0.isHidden }
+        let usable = windows.filter {
+            $0.windowLevel == .normal && !$0.isHidden && $0.sceneRole != .windowExternalDisplayNonInteractive
+        }
         for state in [UIScene.ActivationState.foregroundActive, .foregroundInactive] {
             let inScene = usable.filter { $0.sceneActivationState == state }
             if let window = inScene.first(where: \.isKeyWindow) ?? inScene.first { return window }
@@ -207,11 +211,16 @@ protocol PresentationCandidate {
     var isKeyWindow: Bool { get }
     var isHidden: Bool { get }
     var sceneActivationState: UIScene.ActivationState { get }
+    var sceneRole: UISceneSession.Role? { get }
 }
 
 extension UIWindow: PresentationCandidate {
     var sceneActivationState: UIScene.ActivationState {
         windowScene?.activationState ?? .unattached
+    }
+
+    var sceneRole: UISceneSession.Role? {
+        windowScene?.session.role
     }
 }
 
